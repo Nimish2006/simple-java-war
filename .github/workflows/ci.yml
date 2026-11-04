@@ -1,0 +1,75 @@
+name: CI Build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build
+        run: mvn -B clean package -DskipTests
+
+      - name: Test
+        run: mvn -B test
+
+      - name: Upload WAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: war
+          path: target/*.war
+
+  docker:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            nimish64/simple-java-war:latest
+            nimish64/simple-java-war:${{ github.sha }}
+
+  # Only works if Tomcat is reachable from the internet
+  # OR change runs-on to: self-hosted (runner on your PC/VM)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Download WAR
+        uses: actions/download-artifact@v4
+        with:
+          name: war
+
+      - name: Deploy WAR to Tomcat
+        run: |
+          WAR=$(ls *.war | head -1)
+          echo "Deploying $WAR"
+          curl -u "${{ secrets.TOMCAT_USER }}:${{ secrets.TOMCAT_PASS }}" \
+            -T "$WAR" \
+            "${{ secrets.TOMCAT_URL }}/manager/text/deploy?path=/simple-java-war&update=true"
